@@ -17,9 +17,9 @@ from freshness_fusion import FreshnessFusion, DecisionOutcome
 
 # ================= CONFIG =================
 
-YOLO_MODEL_PATH = r"D:\Hackathon\Tech Sprint\yolov.pt"
-EYE_CLASSIFIER_PATH = r"D:\Hackathon\Tech Sprint\eye_effnet_best (1).pt"
-GILL_CLASSIFIER_PATH = r"D:\Hackathon\Tech Sprint\gill_model.pt"
+YOLO_MODEL_PATH = r"yolov.pt"
+EYE_CLASSIFIER_PATH = r"eye_effnet_best (1).pt"
+GILL_CLASSIFIER_PATH = r"gill_model.pt"
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -27,7 +27,13 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # ================= PIPELINE =================
 
 def run_inference(eye_img_path, gill_img_path, verbose=False):
-
+    """
+    Run fish freshness inference pipeline
+    
+    Returns:
+        dict: Results dictionary with prediction and details, or None if failed
+    """
+    
     print("\n=== FISH FRESHNESS INFERENCE ===\n")
 
     # ---------- LOAD IMAGES ----------
@@ -37,7 +43,7 @@ def run_inference(eye_img_path, gill_img_path, verbose=False):
     except Exception as e:
         print("FAILED: Could not load input images")
         print(e)
-        return
+        return None
 
     # ---------- YOLO CONFIDENCE GATE ----------
     gate = YOLOConfidenceGate(
@@ -47,7 +53,7 @@ def run_inference(eye_img_path, gill_img_path, verbose=False):
 
     if gate.run(eye_img, gill_img) == JobOutcome.FAILED:
         print("FAILED: Eye/Gill validation failed at YOLO gate")
-        return
+        return None
 
     # ---------- PART CROPPING ----------
     cropper = YOLOPartCropper(
@@ -62,7 +68,7 @@ def run_inference(eye_img_path, gill_img_path, verbose=False):
 
     if crop_status == CropStatus.FAILED:
         print("FAILED: Could not crop eye or gill")
-        return
+        return None
 
     # ---------- LOAD CLASSIFIERS (✅ FIXED) ----------
     eye_classifier = EyeFreshnessClassifier(
@@ -85,6 +91,48 @@ def run_inference(eye_img_path, gill_img_path, verbose=False):
     
     # ✅ FIXED: Get business decision from fusion result
     decision = fusion.make_decision(fusion_result)
+
+    # ---------- BUILD RESULT DICTIONARY ----------
+    result = {
+        "prediction": {
+            "freshness_class": fusion_result.final_class.name,
+            "freshness_grade": decision.freshness_grade,
+            "confidence": round(fusion_result.confidence * 100, 2),
+            "is_acceptable": decision.is_acceptable,
+            "recommended_action": decision.recommended_action
+        },
+        "details": {
+            "eye": {
+                "class": eye_result.predicted_class.name,
+                "confidence": round(eye_result.confidence * 100, 2),
+                "is_reliable": eye_result.is_reliable,
+                "probabilities": {
+                    "NOT_FRESH": round(eye_result.probabilities[0], 3),
+                    "FRESH": round(eye_result.probabilities[1], 3),
+                    "HIGHLY_FRESH": round(eye_result.probabilities[2], 3)
+                }
+            },
+            "gill": {
+                "class": gill_result.predicted_class.name,
+                "confidence": round(gill_result.confidence * 100, 2),
+                "is_reliable": gill_result.is_reliable,
+                "probabilities": {
+                    "NOT_FRESH": round(gill_result.probabilities[0], 3),
+                    "FRESH": round(gill_result.probabilities[1], 3),
+                    "HIGHLY_FRESH": round(gill_result.probabilities[2], 3)
+                }
+            },
+            "fusion": {
+                "eye_weight": round(fusion.eye_weight, 2),
+                "gill_weight": round(fusion.gill_weight, 2),
+                "fused_probabilities": {
+                    "NOT_FRESH": round(fusion_result.fused_probabilities[0], 3),
+                    "FRESH": round(fusion_result.fused_probabilities[1], 3),
+                    "HIGHLY_FRESH": round(fusion_result.fused_probabilities[2], 3)
+                }
+            }
+        }
+    }
 
     # ---------- OUTPUT ----------
     print("FINAL RESULT")
@@ -121,6 +169,8 @@ def run_inference(eye_img_path, gill_img_path, verbose=False):
             print(f"{cls.name:14s} | {eye_result.probabilities[i]:.3f}  | {gill_result.probabilities[i]:.3f}  | {fusion_result.fused_probabilities[i]:.3f}")
 
     print("\nInference completed.\n")
+    
+    return result
 
 
 # ================= CLI =================
@@ -132,8 +182,13 @@ if __name__ == "__main__":
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    run_inference(
+    result = run_inference(
         args.eye_image,
         args.gill_image,
         verbose=args.verbose
     )
+    
+    if result:
+        print("\n✅ Success!")
+    else:
+        print("\n❌ Failed!")
