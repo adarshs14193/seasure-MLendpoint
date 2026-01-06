@@ -1,11 +1,26 @@
-# Use Python 3.10 slim image
-FROM python:3.10-slim
+# --- Stage 1: Builder ---
+FROM python:3.10-slim AS builder
 
-# Set working directory
 WORKDIR /app
 
-# Install system dependencies for OpenCV and PyTorch
-RUN apt-get update && apt-get install -y \
+# Install build dependencies (if needed for libraries like numpy/pandas)
+RUN apt-get update && apt-get install -y --no-install-recommends gcc g++
+
+# Create and use a virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+
+# --- Stage 2: Final Runtime ---
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Install ONLY the runtime system libraries (the fix from our first step)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
@@ -14,19 +29,20 @@ RUN apt-get update && apt-get install -y \
     libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first (for better caching)
-COPY requirements.txt .
+# Copy the virtual environment from the builder stage
+COPY --from=builder /opt/venv /opt/venv
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Ensure the app uses the virtual environment's python
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy all application files
+# Copy your application code
 COPY . .
 
-# Create uploads directory
-RUN mkdir -p uploads
+# Run as a non-root user for security
+RUN useradd -m appuser && chown -R appuser /app
+USER appuser
 
-# Expose port
+CMD ["python", "app.py"]
 EXPOSE 8080
 
 # Run the application
